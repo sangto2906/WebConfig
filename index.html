@@ -104,6 +104,16 @@
     flex: none;
     text-align: center;
   }
+  .port-select {
+    width: 100%;
+    padding: 0.5rem 0.7rem;
+    border-radius: 6px;
+    border: 1px solid #333;
+    background: #1a1a2e;
+    color: #eee;
+    font-size: 0.95rem;
+    margin-bottom: 1rem;
+  }
   .status {
     text-align: center;
     padding: 0.5rem;
@@ -119,10 +129,13 @@
 <body>
 
 <h1>DopeT MIDI CC Config</h1>
-<p class="subtitle">Web Serial — Chrome / Edge required</p>
+<p class="subtitle">Web MIDI SysEx — Chrome / Edge required</p>
 
 <div class="card">
-  <button class="connect-btn" id="btnConnect">Connect Device</button>
+  <select class="port-select" id="portSelect">
+    <option value="">-- Select MIDI Output (DopeT MIDIIN) --</option>
+  </select>
+  <button class="connect-btn" id="btnConnect">Connect</button>
 
   <div id="controls" class="hidden">
     <div class="slider-group">
@@ -167,10 +180,17 @@ const CC_NAMES = {
   91: "Reverb", 92: "Tremolo", 93: "Chorus", 94: "Detune", 95: "Phaser"
 };
 
-let port = null;
-let reader = null;
-let writer = null;
-let readBuffer = '';
+const SYSEX_MFR = 0x7D;
+const CMD_GET  = 0x01;
+const CMD_SET  = 0x02;
+const CMD_SAVE = 0x03;
+
+let midiAccess = null;
+let midiOut = null;   // send SysEx to device (device's IN port = "MIDIIN")
+let midiIn = null;    // receive SysEx reply from device (device's OUT port = "MIDIIN")
+let sysexResolve = null;
+let sysexTimeout = null;
+let connected = false;
 
 function buildSelects() {
   for (let s = 0; s < 3; s++) {
@@ -198,146 +218,176 @@ function setStatus(msg, type = '') {
   el.className = 'status ' + type;
 }
 
-async function sendCommand(cmd) {
-  const encoder = new TextEncoder();
-  await writer.write(encoder.encode(cmd + '\n'));
+function sendSysEx(data) {
+  if (!midiOut) return;
+  const msg = [0xF0, SYSEX_MFR, ...data, 0xF7];
+  midiOut.send(msg);
 }
 
-async function readLine(timeoutMs = 3000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const idx = readBuffer.indexOf('\n');
-    if (idx >= 0) {
-      const line = readBuffer.substring(0, idx).trim();
-      readBuffer = readBuffer.substring(idx + 1);
-      return line;
-    }
-    await new Promise(r => setTimeout(r, 30));
-  }
-  return null;
-}
-
-async function startReading() {
-  const decoder = new TextDecoder();
-  while (port && port.readable) {
-    try {
-      reader = port.readable.getReader();
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        readBuffer += decoder.decode(value, { stream: true });
+function waitSysExReply(cmd, timeoutMs = 3000) {
+  return new Promise((resolve) => {
+    if (sysexTimeout) clearTimeout(sysexTimeout);
+    sysexResolve = (data) => {
+      if (data[0] === SYSEX_MFR && data[1] === cmd) {
+        clearTimeout(sysexTimeout);
+        sysexResolve = null;
+        resolve(data);
       }
+    };
+    sysexTimeout = setTimeout(() => {
+      sysexResolve = null;
+      resolve(null);
+    }, timeoutMs);
+  });
+}
+
+function onMidiMessage(e) {
+  const d = e.data;
+  if (!d || d.length < 4) return;
+  // SysEx: starts with F0, ends with F7
+  if (d[0] === 0xF0 && d[d.length - 1] === 0xF7) {
+    const payload = Array.from(d.slice(1, d.length - 1));
+    if (sysexResolve) sysexResolve(payload);
+  }
+}
+
+async function populatePorts() {
+  const sel = document.getElementById('portSelect');
+  sel.innerHTML = '<option value="">-- Select MIDI Output (DopeT MIDIIN) --</option>';
+
+  if (!midiAccess) {
+    try {
+      midiAccess = await navigator.requestMIDIAccess({ sysex: true });
     } catch (e) {
-      // reader cancelled or port disconnected
-    } finally {
-      if (reader) { reader.releaseLock(); reader = null; }
+      setStatus('MIDI access denied. Enable SysEx permission.', 'err');
+      return;
     }
   }
+
+  // List outputs (device MIDI IN ports — we send TO these)
+  const outputs = Array.from(midiAccess.outputs.values());
+  const inputs = Array.from(midiAccess.inputs.values());
+
+  for (const out of outputs) {
+    const opt = document.createElement('option');
+    opt.value = out.id;
+    opt.textContent = out.name;
+    // auto-select if name contains MIDIIN
+    if (out.name && out.name.toLowerCase().includes('midiin')) {
+      opt.selected = true;
+    }
+    sel.appendChild(opt);
+  }
+
+  // Store inputs for matching later
+  sel.dataset.inputs = JSON.stringify(inputs.map(i => ({ id: i.id, name: i.name })));
+}
+
+function findMatchingInput(outputName) {
+  if (!midiAccess) return null;
+  const inputs = Array.from(midiAccess.inputs.values());
+  // Find input with matching name (device's second cable output)
+  for (const inp of inputs) {
+    if (inp.name && inp.name.toLowerCase().includes('midiin')) return inp;
+    if (outputName && inp.name && inp.name.includes(outputName.replace('MIDIIN', ''))) return inp;
+  }
+  // fallback: second input if available
+  return inputs.length >= 2 ? inputs[1] : inputs[0] || null;
 }
 
 async function loadConfigFromDevice() {
-  readBuffer = '';
-  let resp = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    setStatus(`Reading config... (attempt ${attempt + 1})`, 'ok');
-    await sendCommand('GET');
-    resp = await readLine(3000);
-    if (resp && resp.startsWith('CC ')) break;
-    readBuffer = '';
-    await new Promise(r => setTimeout(r, 500));
-  }
-  if (resp && resp.startsWith('CC ')) {
-    const parts = resp.split(' ');
+  setStatus('Reading config...', 'ok');
+  sendSysEx([CMD_GET]);
+  const resp = await waitSysExReply(CMD_GET, 3000);
+  if (resp && resp.length >= 5) {
     for (let i = 0; i < 3; i++) {
-      const val = Math.max(0, Math.min(127, parseInt(parts[i + 1]) || 0));
+      const val = Math.max(0, Math.min(127, resp[i + 2]));
       document.getElementById(`cc${i}`).value = val;
       document.getElementById(`ccNum${i}`).value = val;
     }
     setStatus('Config loaded.', 'ok');
     return true;
   }
-  setStatus('Could not read config. Check connection.', 'err');
+  setStatus('No response from device. Check port selection.', 'err');
   return false;
 }
 
-async function disconnect() {
-  try {
-    if (reader) { await reader.cancel(); }
-    if (writer) { writer.releaseLock(); writer = null; }
-    if (port) { await port.close(); port = null; }
-  } catch (e) { /* ignore */ }
-  document.getElementById('btnConnect').textContent = 'Connect Device';
-  document.getElementById('btnConnect').disabled = false;
-  document.getElementById('controls').classList.add('hidden');
-  setStatus('Disconnected.', '');
-}
-
 document.getElementById('btnConnect').addEventListener('click', async () => {
-  if (port) { await disconnect(); return; }
-  try {
-    port = await navigator.serial.requestPort();
-    await port.open({ baudRate: 115200 });
-    writer = port.writable.getWriter();
-    startReading();
-
-    setStatus('Connected! Waiting for device...', 'ok');
-    document.getElementById('btnConnect').textContent = 'Disconnect';
-    document.getElementById('controls').classList.remove('hidden');
-
-    await port.setSignals({ dataTerminalReady: false });
-    await new Promise(r => setTimeout(r, 100));
-    await port.setSignals({ dataTerminalReady: true });
-    await new Promise(r => setTimeout(r, 800));
-
-    await loadConfigFromDevice();
-  } catch (e) {
-    if (e.name !== 'NotFoundError') setStatus('Error: ' + e.message, 'err');
+  if (connected) {
+    // disconnect
+    if (midiIn) { midiIn.onmidimessage = null; midiIn = null; }
+    midiOut = null;
+    connected = false;
+    document.getElementById('btnConnect').textContent = 'Connect';
+    document.getElementById('controls').classList.add('hidden');
+    setStatus('Disconnected.', '');
+    return;
   }
+
+  const sel = document.getElementById('portSelect');
+  const outId = sel.value;
+  if (!outId) { setStatus('Select a MIDI port first.', 'err'); return; }
+
+  const out = midiAccess.outputs.get(outId);
+  if (!out) { setStatus('MIDI port not found.', 'err'); return; }
+
+  midiOut = out;
+
+  // Find matching input to receive replies
+  midiIn = findMatchingInput(out.name);
+  if (midiIn) {
+    midiIn.onmidimessage = onMidiMessage;
+  } else {
+    setStatus('Warning: no matching MIDI input found for replies.', 'err');
+  }
+
+  connected = true;
+  document.getElementById('btnConnect').textContent = 'Disconnect';
+  document.getElementById('controls').classList.remove('hidden');
+
+  await loadConfigFromDevice();
 });
 
 document.getElementById('btnRefresh').addEventListener('click', async () => {
-  if (!port) { setStatus('Not connected.', 'err'); return; }
+  if (!connected) { setStatus('Not connected.', 'err'); return; }
   await loadConfigFromDevice();
 });
 
 document.getElementById('btnSave').addEventListener('click', async () => {
-  if (!port) { setStatus('Not connected.', 'err'); return; }
-  try {
-    for (let i = 0; i < 3; i++) {
-      const cc = document.getElementById(`ccNum${i}`).value;
-      readBuffer = '';
-      await sendCommand(`SET ${i} ${cc}`);
-      const resp = await readLine(3000);
-      if (resp !== 'OK') {
-        setStatus(`Error setting slider ${i + 1}: ${resp || 'no response'}`, 'err');
-        return;
-      }
-      await new Promise(r => setTimeout(r, 100));
+  if (!connected) { setStatus('Not connected.', 'err'); return; }
+  for (let i = 0; i < 3; i++) {
+    const cc = parseInt(document.getElementById(`ccNum${i}`).value) || 0;
+    sendSysEx([CMD_SET, i, cc]);
+    const resp = await waitSysExReply(CMD_SET, 3000);
+    if (!resp || resp[2] !== 0x00) {
+      setStatus(`Error setting slider ${i + 1}: ${resp ? 'rejected' : 'no response'}`, 'err');
+      return;
     }
-    readBuffer = '';
-    await sendCommand('SAVE');
-    const resp = await readLine(3000);
-    if (resp === 'SAVED') {
-      setStatus('Saved to device flash! ✓', 'ok');
-    } else {
-      setStatus('Save failed: ' + (resp || 'no response'), 'err');
-    }
-  } catch (e) {
-    setStatus('Error: ' + e.message, 'err');
+    await new Promise(r => setTimeout(r, 50));
   }
-});
-
-navigator.serial.addEventListener('disconnect', (e) => {
-  if (port && e.target === port) {
-    port = null; writer = null; reader = null;
-    document.getElementById('btnConnect').textContent = 'Connect Device';
-    document.getElementById('btnConnect').disabled = false;
-    document.getElementById('controls').classList.add('hidden');
-    setStatus('Device disconnected.', 'err');
+  sendSysEx([CMD_SAVE]);
+  const resp = await waitSysExReply(CMD_SAVE, 3000);
+  if (resp && resp[2] === 0x00) {
+    setStatus('Saved to device flash! ✓', 'ok');
+  } else {
+    setStatus('Save failed: ' + (resp ? 'rejected' : 'no response'), 'err');
   }
 });
 
 buildSelects();
+
+// Initialize MIDI access and populate ports
+if (navigator.requestMIDIAccess) {
+  navigator.requestMIDIAccess({ sysex: true }).then(access => {
+    midiAccess = access;
+    access.onstatechange = () => populatePorts();
+    populatePorts();
+  }).catch(() => {
+    setStatus('Web MIDI not supported or SysEx denied.', 'err');
+  });
+} else {
+  setStatus('Web MIDI API not available in this browser.', 'err');
+}
 </script>
 </body>
 </html>
