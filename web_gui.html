@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DopeT MIDI CC Config</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #1a1a2e;
+    color: #eee;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+  }
+  h1 {
+    font-size: 1.8rem;
+    margin-bottom: 0.5rem;
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .subtitle { color: #888; margin-bottom: 2rem; font-size: 0.9rem; }
+  .card {
+    background: #16213e;
+    border-radius: 12px;
+    padding: 2rem;
+    width: 100%;
+    max-width: 480px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  }
+  .connect-btn, .save-btn {
+    width: 100%;
+    padding: 0.8rem;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .connect-btn {
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    color: #fff;
+    margin-bottom: 1.5rem;
+  }
+  .connect-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(102,126,234,0.4); }
+  .connect-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+  .save-btn {
+    background: linear-gradient(135deg, #11998e, #38ef7d);
+    color: #1a1a2e;
+    margin-top: 1.5rem;
+  }
+  .save-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(56,239,125,0.3); }
+  .save-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+  .btn-row { display: flex; gap: 0.8rem; margin-top: 1.5rem; }
+  .btn-row .save-btn, .btn-row .refresh-btn { margin-top: 0; }
+  .refresh-btn {
+    width: 100%;
+    padding: 0.8rem;
+    border: 2px solid #667eea;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: transparent;
+    color: #667eea;
+  }
+  .refresh-btn:hover { background: rgba(102,126,234,0.1); }
+  .refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .slider-group {
+    margin-bottom: 1.2rem;
+    padding: 1rem;
+    background: #0f3460;
+    border-radius: 8px;
+  }
+  .slider-group label {
+    display: block;
+    font-size: 0.85rem;
+    color: #aaa;
+    margin-bottom: 0.5rem;
+  }
+  .slider-group .row {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+  }
+  .slider-group select, .slider-group input {
+    flex: 1;
+    padding: 0.5rem 0.7rem;
+    border-radius: 6px;
+    border: 1px solid #333;
+    background: #1a1a2e;
+    color: #eee;
+    font-size: 0.95rem;
+  }
+  .slider-group input[type="number"] {
+    width: 70px;
+    flex: none;
+    text-align: center;
+  }
+  .status {
+    text-align: center;
+    padding: 0.5rem;
+    font-size: 0.8rem;
+    color: #888;
+    margin-top: 1rem;
+  }
+  .status.ok { color: #38ef7d; }
+  .status.err { color: #ff6b6b; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+
+<h1>DopeT MIDI CC Config</h1>
+<p class="subtitle">Web Serial — Chrome / Edge required</p>
+
+<div class="card">
+  <button class="connect-btn" id="btnConnect">Connect Device</button>
+
+  <div id="controls" class="hidden">
+    <div class="slider-group">
+      <label>Slider 1 (GP27)</label>
+      <div class="row">
+        <select id="cc0"></select>
+        <input type="number" id="ccNum0" min="0" max="127" value="11">
+      </div>
+    </div>
+    <div class="slider-group">
+      <label>Slider 2 (GP28)</label>
+      <div class="row">
+        <select id="cc1"></select>
+        <input type="number" id="ccNum1" min="0" max="127" value="1">
+      </div>
+    </div>
+    <div class="slider-group">
+      <label>Slider 3 (GP26)</label>
+      <div class="row">
+        <select id="cc2"></select>
+        <input type="number" id="ccNum2" min="0" max="127" value="12">
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="refresh-btn" id="btnRefresh">Refresh</button>
+      <button class="save-btn" id="btnSave">Save to Device</button>
+    </div>
+  </div>
+
+  <div class="status" id="status"></div>
+</div>
+
+<script>
+const CC_NAMES = {
+  0: "Bank Select", 1: "Mod Wheel", 2: "Breath", 4: "Foot Controller",
+  5: "Portamento Time", 7: "Volume", 8: "Balance", 10: "Pan",
+  11: "Expression", 12: "Effect 1", 13: "Effect 2",
+  64: "Sustain", 65: "Portamento", 66: "Sostenuto", 67: "Soft Pedal",
+  68: "Legato", 69: "Hold 2", 70: "Sound Variation", 71: "Resonance",
+  72: "Release", 73: "Attack", 74: "Cutoff", 75: "Decay",
+  76: "Vibrato Rate", 77: "Vibrato Depth", 78: "Vibrato Delay",
+  91: "Reverb", 92: "Tremolo", 93: "Chorus", 94: "Detune", 95: "Phaser"
+};
+
+let port = null;
+let reader = null;
+let writer = null;
+let readBuffer = '';
+
+function buildSelects() {
+  for (let s = 0; s < 3; s++) {
+    const sel = document.getElementById(`cc${s}`);
+    for (let i = 0; i <= 127; i++) {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = CC_NAMES[i] ? `${i} - ${CC_NAMES[i]}` : `CC ${i}`;
+      sel.appendChild(opt);
+    }
+    sel.addEventListener('change', () => {
+      document.getElementById(`ccNum${s}`).value = sel.value;
+    });
+    document.getElementById(`ccNum${s}`).addEventListener('change', (e) => {
+      const v = Math.max(0, Math.min(127, parseInt(e.target.value) || 0));
+      e.target.value = v;
+      sel.value = v;
+    });
+  }
+}
+
+function setStatus(msg, type = '') {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = 'status ' + type;
+}
+
+async function sendCommand(cmd) {
+  const encoder = new TextEncoder();
+  await writer.write(encoder.encode(cmd + '\n'));
+}
+
+async function readLine(timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const idx = readBuffer.indexOf('\n');
+    if (idx >= 0) {
+      const line = readBuffer.substring(0, idx).trim();
+      readBuffer = readBuffer.substring(idx + 1);
+      return line;
+    }
+    await new Promise(r => setTimeout(r, 30));
+  }
+  return null;
+}
+
+async function startReading() {
+  const decoder = new TextDecoder();
+  while (port && port.readable) {
+    try {
+      reader = port.readable.getReader();
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        readBuffer += decoder.decode(value, { stream: true });
+      }
+    } catch (e) {
+      // reader cancelled or port disconnected
+    } finally {
+      if (reader) { reader.releaseLock(); reader = null; }
+    }
+  }
+}
+
+async function loadConfigFromDevice() {
+  readBuffer = '';
+  let resp = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    setStatus(`Reading config... (attempt ${attempt + 1})`, 'ok');
+    await sendCommand('GET');
+    resp = await readLine(3000);
+    if (resp && resp.startsWith('CC ')) break;
+    readBuffer = '';
+    await new Promise(r => setTimeout(r, 500));
+  }
+  if (resp && resp.startsWith('CC ')) {
+    const parts = resp.split(' ');
+    for (let i = 0; i < 3; i++) {
+      const val = Math.max(0, Math.min(127, parseInt(parts[i + 1]) || 0));
+      document.getElementById(`cc${i}`).value = val;
+      document.getElementById(`ccNum${i}`).value = val;
+    }
+    setStatus('Config loaded.', 'ok');
+    return true;
+  }
+  setStatus('Could not read config. Check connection.', 'err');
+  return false;
+}
+
+async function disconnect() {
+  try {
+    if (reader) { await reader.cancel(); }
+    if (writer) { writer.releaseLock(); writer = null; }
+    if (port) { await port.close(); port = null; }
+  } catch (e) { /* ignore */ }
+  document.getElementById('btnConnect').textContent = 'Connect Device';
+  document.getElementById('btnConnect').disabled = false;
+  document.getElementById('controls').classList.add('hidden');
+  setStatus('Disconnected.', '');
+}
+
+document.getElementById('btnConnect').addEventListener('click', async () => {
+  if (port) { await disconnect(); return; }
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    writer = port.writable.getWriter();
+    startReading();
+
+    setStatus('Connected! Waiting for device...', 'ok');
+    document.getElementById('btnConnect').textContent = 'Disconnect';
+    document.getElementById('controls').classList.remove('hidden');
+
+    await port.setSignals({ dataTerminalReady: false });
+    await new Promise(r => setTimeout(r, 100));
+    await port.setSignals({ dataTerminalReady: true });
+    await new Promise(r => setTimeout(r, 800));
+
+    await loadConfigFromDevice();
+  } catch (e) {
+    if (e.name !== 'NotFoundError') setStatus('Error: ' + e.message, 'err');
+  }
+});
+
+document.getElementById('btnRefresh').addEventListener('click', async () => {
+  if (!port) { setStatus('Not connected.', 'err'); return; }
+  await loadConfigFromDevice();
+});
+
+document.getElementById('btnSave').addEventListener('click', async () => {
+  if (!port) { setStatus('Not connected.', 'err'); return; }
+  try {
+    for (let i = 0; i < 3; i++) {
+      const cc = document.getElementById(`ccNum${i}`).value;
+      readBuffer = '';
+      await sendCommand(`SET ${i} ${cc}`);
+      const resp = await readLine(3000);
+      if (resp !== 'OK') {
+        setStatus(`Error setting slider ${i + 1}: ${resp || 'no response'}`, 'err');
+        return;
+      }
+      await new Promise(r => setTimeout(r, 100));
+    }
+    readBuffer = '';
+    await sendCommand('SAVE');
+    const resp = await readLine(3000);
+    if (resp === 'SAVED') {
+      setStatus('Saved to device flash! ✓', 'ok');
+    } else {
+      setStatus('Save failed: ' + (resp || 'no response'), 'err');
+    }
+  } catch (e) {
+    setStatus('Error: ' + e.message, 'err');
+  }
+});
+
+navigator.serial.addEventListener('disconnect', (e) => {
+  if (port && e.target === port) {
+    port = null; writer = null; reader = null;
+    document.getElementById('btnConnect').textContent = 'Connect Device';
+    document.getElementById('btnConnect').disabled = false;
+    document.getElementById('controls').classList.add('hidden');
+    setStatus('Device disconnected.', 'err');
+  }
+});
+
+buildSelects();
+</script>
+</body>
+</html>
