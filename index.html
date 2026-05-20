@@ -133,7 +133,7 @@
 
 <div class="card">
   <select class="port-select" id="portSelect">
-    <option value="">-- Select MIDI Output (DopeT) --</option>
+    <option value="">-- Select DopeTDAW for Config --</option>
   </select>
   <button class="connect-btn" id="btnConnect">Connect</button>
 
@@ -186,8 +186,8 @@ const CMD_SET  = 0x02;
 const CMD_SAVE = 0x03;
 
 let midiAccess = null;
-let midiOut = null;   // send SysEx to device (cable 0 "DopeT")
-let midiIn = null;    // receive SysEx reply from device (cable 0 "DopeT")
+let midiOut = null;   // send SysEx to DopeTDAW (cable 0)
+let midiIn = null;    // receive replies from DopeTDAW (cable 0)
 let sysexResolve = null;
 let sysexTimeout = null;
 let connected = false;
@@ -253,7 +253,7 @@ function onMidiMessage(e) {
 
 async function populatePorts() {
   const sel = document.getElementById('portSelect');
-  sel.innerHTML = '<option value="">-- Select MIDI Output (DopeT) --</option>';
+  sel.innerHTML = '<option value="">-- Select DopeTDAW for Config --</option>';
 
   if (!midiAccess) {
     try {
@@ -272,8 +272,8 @@ async function populatePorts() {
     const opt = document.createElement('option');
     opt.value = out.id;
     opt.textContent = out.name;
-    // auto-select if name is "DopeT" (cable 0 for config)
-    if (out.name && out.name === 'DopeT') {
+    // auto-select if name is "DopeTDAW" (config/Mackie port)
+    if (out.name && out.name === 'DopeTDAW') {
       opt.selected = true;
     }
     sel.appendChild(opt);
@@ -286,9 +286,9 @@ async function populatePorts() {
 function findMatchingInput(outputName) {
   if (!midiAccess) return null;
   const inputs = Array.from(midiAccess.inputs.values());
-  // Find "DopeT" input to receive replies
+  // Find "DopeTDAW" input to receive replies
   for (const inp of inputs) {
-    if (inp.name && inp.name === 'DopeT') return inp;
+    if (inp.name && inp.name === 'DopeTDAW') return inp;
   }
   // fallback: first input
   return inputs[0] || null;
@@ -337,7 +337,7 @@ document.getElementById('btnConnect').addEventListener('click', async () => {
   if (midiIn) {
     midiIn.onmidimessage = onMidiMessage;
   } else {
-    setStatus('Warning: no DopeT input found for replies. Select manually.', 'err');
+    setStatus('Warning: no DopeTDAW input found. Select manually.', 'err');
   }
 
   connected = true;
