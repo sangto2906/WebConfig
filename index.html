@@ -133,7 +133,7 @@
 
 <div class="card">
   <select class="port-select" id="portSelect">
-    <option value="">-- Select MIDI Output (DopeT MIDIIN) --</option>
+    <option value="">-- Select MIDI Output (DopeT) --</option>
   </select>
   <button class="connect-btn" id="btnConnect">Connect</button>
 
@@ -186,8 +186,8 @@ const CMD_SET  = 0x02;
 const CMD_SAVE = 0x03;
 
 let midiAccess = null;
-let midiOut = null;   // send SysEx to device (device's IN port = "MIDIIN")
-let midiIn = null;    // receive SysEx reply from device (device's OUT port = "MIDIIN")
+let midiOut = null;   // send SysEx to device (cable 0 "DopeT")
+let midiIn = null;    // receive SysEx reply from device (cable 0 "DopeT")
 let sysexResolve = null;
 let sysexTimeout = null;
 let connected = false;
@@ -253,7 +253,7 @@ function onMidiMessage(e) {
 
 async function populatePorts() {
   const sel = document.getElementById('portSelect');
-  sel.innerHTML = '<option value="">-- Select MIDI Output (DopeT MIDIIN) --</option>';
+  sel.innerHTML = '<option value="">-- Select MIDI Output (DopeT) --</option>';
 
   if (!midiAccess) {
     try {
@@ -264,7 +264,7 @@ async function populatePorts() {
     }
   }
 
-  // List outputs (device MIDI IN ports — we send TO these)
+  // List outputs - show both DopeT and DopeT2
   const outputs = Array.from(midiAccess.outputs.values());
   const inputs = Array.from(midiAccess.inputs.values());
 
@@ -272,8 +272,8 @@ async function populatePorts() {
     const opt = document.createElement('option');
     opt.value = out.id;
     opt.textContent = out.name;
-    // auto-select if name contains MIDIIN
-    if (out.name && out.name.toLowerCase().includes('midiin')) {
+    // auto-select if name is "DopeT" (cable 0 for config)
+    if (out.name && out.name === 'DopeT') {
       opt.selected = true;
     }
     sel.appendChild(opt);
@@ -286,13 +286,12 @@ async function populatePorts() {
 function findMatchingInput(outputName) {
   if (!midiAccess) return null;
   const inputs = Array.from(midiAccess.inputs.values());
-  // Find input with matching name (device's second cable output)
+  // Find "DopeT" input to receive replies
   for (const inp of inputs) {
-    if (inp.name && inp.name.toLowerCase().includes('midiin')) return inp;
-    if (outputName && inp.name && inp.name.includes(outputName.replace('MIDIIN', ''))) return inp;
+    if (inp.name && inp.name === 'DopeT') return inp;
   }
-  // fallback: second input if available
-  return inputs.length >= 2 ? inputs[1] : inputs[0] || null;
+  // fallback: first input
+  return inputs[0] || null;
 }
 
 async function loadConfigFromDevice() {
@@ -338,7 +337,7 @@ document.getElementById('btnConnect').addEventListener('click', async () => {
   if (midiIn) {
     midiIn.onmidimessage = onMidiMessage;
   } else {
-    setStatus('Warning: no matching MIDI input found for replies.', 'err');
+    setStatus('Warning: no DopeT input found for replies. Select manually.', 'err');
   }
 
   connected = true;
