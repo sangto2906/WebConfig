@@ -21,6 +21,7 @@
     font-size: 1.8rem;
     margin-bottom: 0.5rem;
     background: linear-gradient(135deg, #667eea, #764ba2);
+    background-clip: text;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
   }
@@ -104,6 +105,26 @@
     flex: none;
     text-align: center;
   }
+  .daw-group {
+    background: #1a1a2e;
+    border: 1px solid #667eea;
+  }
+  .daw-select {
+    flex: 2;
+    padding: 0.5rem 0.7rem;
+    border-radius: 6px;
+    border: 1px solid #333;
+    background: #0f3460;
+    color: #eee;
+    font-size: 0.95rem;
+  }
+  .note-info {
+    flex: 1;
+    font-size: 0.8rem;
+    color: #888;
+    text-align: right;
+    white-space: nowrap;
+  }
   .port-select {
     width: 100%;
     padding: 0.5rem 0.7rem;
@@ -133,7 +154,7 @@
 
 <div class="card">
   <select class="port-select" id="portSelect">
-    <option value="">-- Select DopeTDAW for Config --</option>
+    <option value="">-- Select Port for Config --</option>
   </select>
   <button class="connect-btn" id="btnConnect">Connect</button>
 
@@ -159,6 +180,13 @@
         <input type="number" id="ccNum2" min="0" max="127" value="12">
       </div>
     </div>
+    <div class="slider-group daw-group">
+      <label>DAW Profile for Undo Button</label>
+      <div class="row">
+        <select id="dawProfile" class="daw-select"></select>
+        <span id="dawNoteInfo" class="note-info">--</span>
+      </div>
+    </div>
     <div class="btn-row">
       <button class="refresh-btn" id="btnRefresh">Refresh</button>
       <button class="save-btn" id="btnSave">Save to Device</button>
@@ -181,9 +209,17 @@ const CC_NAMES = {
 };
 
 const SYSEX_MFR = 0x7D;
-const CMD_GET  = 0x01;
-const CMD_SET  = 0x02;
-const CMD_SAVE = 0x03;
+const CMD_GET       = 0x01;
+const CMD_SET       = 0x02;
+const CMD_SAVE      = 0x03;
+const CMD_GET_UNDO  = 0x10;
+const CMD_SET_UNDO  = 0x11;
+
+const DAW_PROFILES = [
+  { name: "Cubase / Logic", note: 0x46, desc: "Note 70 (Mackie MCU standard)" },
+  { name: "FL Studio", note: 0x3D, desc: "Note 61 (custom mapping)" },
+  { name: "Studio One", note: 0x51, desc: "Note 81 (custom mapping)" }
+];
 
 let midiAccess = null;
 let midiOut = null;   // send SysEx to DopeTDAW (cable 0)
@@ -193,6 +229,7 @@ let sysexTimeout = null;
 let connected = false;
 
 function buildSelects() {
+  // Build CC dropdowns for sliders
   for (let s = 0; s < 3; s++) {
     const sel = document.getElementById(`cc${s}`);
     for (let i = 0; i <= 127; i++) {
@@ -209,6 +246,24 @@ function buildSelects() {
       e.target.value = v;
       sel.value = v;
     });
+  }
+
+  // Build DAW profile dropdown
+  const dawSel = document.getElementById('dawProfile');
+  for (let i = 0; i < DAW_PROFILES.length; i++) {
+    const opt = document.createElement('option');
+    opt.value = i;
+    opt.textContent = DAW_PROFILES[i].name;
+    dawSel.appendChild(opt);
+  }
+  dawSel.addEventListener('change', updateDawNoteInfo);
+}
+
+function updateDawNoteInfo() {
+  const idx = parseInt(document.getElementById('dawProfile').value) || 0;
+  const profile = DAW_PROFILES[idx];
+  if (profile) {
+    document.getElementById('dawNoteInfo').textContent = `0x${profile.note.toString(16).toUpperCase().padStart(2,'0')} (${profile.desc.split(' ')[1]})`;
   }
 }
 
@@ -264,7 +319,7 @@ async function populatePorts() {
     }
   }
 
-  // List outputs - show both DopeT and DopeT2
+  // List outputs - DopeTDAW for config/Mackie, DopeT for CC
   const outputs = Array.from(midiAccess.outputs.values());
   const inputs = Array.from(midiAccess.inputs.values());
 
@@ -272,7 +327,7 @@ async function populatePorts() {
     const opt = document.createElement('option');
     opt.value = out.id;
     opt.textContent = out.name;
-    // auto-select if name is "DopeTDAW" (config/Mackie port)
+    // auto-select if name is "DopeTDAW" (cable 0: config/Mackie)
     if (out.name && out.name === 'DopeTDAW') {
       opt.selected = true;
     }
@@ -296,19 +351,33 @@ function findMatchingInput(outputName) {
 
 async function loadConfigFromDevice() {
   setStatus('Reading config...', 'ok');
+  
+  // Load CC config
   sendSysEx([CMD_GET]);
-  const resp = await waitSysExReply(CMD_GET, 3000);
-  if (resp && resp.length >= 5) {
+  const ccResp = await waitSysExReply(CMD_GET, 3000);
+  if (ccResp && ccResp.length >= 5) {
     for (let i = 0; i < 3; i++) {
-      const val = Math.max(0, Math.min(127, resp[i + 2]));
+      const val = Math.max(0, Math.min(127, ccResp[i + 2]));
       document.getElementById(`cc${i}`).value = val;
       document.getElementById(`ccNum${i}`).value = val;
     }
-    setStatus('Config loaded.', 'ok');
+  } else {
+    setStatus('No response for CC config.', 'err');
+    return false;
+  }
+
+  // Load DAW undo profile
+  sendSysEx([CMD_GET_UNDO]);
+  const undoResp = await waitSysExReply(CMD_GET_UNDO, 3000);
+  if (undoResp && undoResp.length >= 3) {
+    const currentProfile = undoResp[2];
+    document.getElementById('dawProfile').value = currentProfile;
+    updateDawNoteInfo();
+    setStatus('Config loaded (CC + DAW profile).', 'ok');
     return true;
   }
-  setStatus('No response from device. Check port selection.', 'err');
-  return false;
+  setStatus('Config partially loaded (no DAW profile response).', 'ok');
+  return true;
 }
 
 document.getElementById('btnConnect').addEventListener('click', async () => {
@@ -354,6 +423,8 @@ document.getElementById('btnRefresh').addEventListener('click', async () => {
 
 document.getElementById('btnSave').addEventListener('click', async () => {
   if (!connected) { setStatus('Not connected.', 'err'); return; }
+  
+  // Save CC config
   for (let i = 0; i < 3; i++) {
     const cc = parseInt(document.getElementById(`ccNum${i}`).value) || 0;
     sendSysEx([CMD_SET, i, cc]);
@@ -364,6 +435,18 @@ document.getElementById('btnSave').addEventListener('click', async () => {
     }
     await new Promise(r => setTimeout(r, 50));
   }
+  
+  // Save DAW undo profile
+  const dawProfile = parseInt(document.getElementById('dawProfile').value) || 0;
+  sendSysEx([CMD_SET_UNDO, dawProfile]);
+  const dawResp = await waitSysExReply(CMD_SET_UNDO, 3000);
+  if (!dawResp || dawResp[2] !== 0x00) {
+    setStatus('Error setting DAW profile: ' + (dawResp ? 'rejected' : 'no response'), 'err');
+    return;
+  }
+  await new Promise(r => setTimeout(r, 50));
+  
+  // Commit to flash
   sendSysEx([CMD_SAVE]);
   const resp = await waitSysExReply(CMD_SAVE, 3000);
   if (resp && resp[2] === 0x00) {
